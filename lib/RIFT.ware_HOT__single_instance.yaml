@@ -1,0 +1,84 @@
+heat_template_version: 2015-04-30
+description: >
+  A template to create a Rift.ware VM with Private & Public IPs 
+  Will allocate & assign Floating IP to RIFT.ware Launchpad, and will update the RIFT_EXTERNAL_ADDRESS
+parameters:
+  key_name:
+    type: string
+    description: SSH key to be associated to RIFT.ware Launchpad VM
+    default: id-grunt
+  instance_type:
+    type: string
+    description: Flavor name to use for RIFT.ware Launchpad
+    default: m1.large
+  image_id:
+    type: string
+    description: ID of the image to use for the new instance.
+    default: launchpad-verizon-6.1.0.0.87255
+  mgmt_network:
+    type: string
+    description: Management Network
+    default: private
+  public_network:
+    type: string
+    description: The Public Network to assign Floating IPs from
+    default: public
+resources:
+  launchpad_vm:
+        type: OS::Nova::Server
+        properties:
+          image: { get_param: image_id }
+          flavor: { get_param: instance_type }
+          key_name: { get_param: key_name }
+          networks:
+          - port: { get_resource: rift_private_ip_port_id }
+          user_data_format: RAW
+          user_data:
+            str_replace:
+              template: |
+                #cloud-config
+                write_files:
+                  - content: |
+                      #!/bin/bash
+                      set -e
+
+                      RIFT_INSTALL="/usr/rift"
+                      echo "Running RIFT.ware specific user-data script"
+
+                      echo "Setting RIFT_EXTERNAL_ADDRESS to $floatingIP"
+                      mkdir -p $RIFT_INSTALL/var/rift/env.d
+                      echo "$floatingIP" > $RIFT_INSTALL/var/rift/env.d/RIFT_EXTERNAL_ADDRESS
+
+                      echo "Restart RIFT.ware launchpad.service to effect the changes"
+                      systemctl restart launchpad.service
+                      echo "RIFT.ware launchpad.service restarted"
+                    path: /tmp/rift-setup
+                    permissions: '0700'
+                runcmd:
+                  - /tmp/rift-setup
+              params:
+                $floatingIP: { get_attr: [floating_ips, floating_ip_address] }
+
+  rift_private_ip_port_id:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: mgmt_network }
+
+  floating_ips:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_network }
+
+  floating_ip_assoc:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ips }
+      port_id: { get_resource: rift_private_ip_port_id }
+
+outputs:
+  instance_ips:
+    description: IP of new instance.
+    value: { get_attr: [ launchpad_vm, first_address ] }
+  floating_ips:
+    description: Floating IPs of new instance.
+    value: { get_attr: [ floating_ips, floating_ip_address ] }
