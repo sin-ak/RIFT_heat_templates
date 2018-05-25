@@ -1,0 +1,94 @@
+heat_template_version: 2013-05-23
+
+description: Template that installs a small example web server.
+
+parameters:
+  image:
+    type: string
+    label: Image name or ID
+    description: Image to be used for server. Please use an Ubuntu based image.
+    default: launchpad-verizon-6.1.0.0.87255
+  flavor:
+    type: string
+    label: Flavor
+    description: Type of instance (flavor) to be used on the compute instance.
+    default: m1.large
+  key:
+    type: string
+    label: Key name
+    description: Name of key-pair to be installed on the compute instance.
+    default: id-grunt
+  mgmt_network:
+    type: string
+    description: Management Network
+    default: private
+  public_network:
+    type: string
+    label: Floating IP network name or ID
+    description: Network to assign Floating IP from.
+    default: public
+
+resources:
+  port:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: mgmt_network }
+
+  floating_ips:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_network }
+
+  floating_ip_assoc:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ips }
+      port_id: { get_resource: rift_private_ip_port_id }
+
+  tiny_instance:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key }
+      networks:
+        - port: { get_resource: port }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+              template: |
+                #cloud-config
+                write_files:
+                  - content: |
+                      #!/bin/bash
+                      set -e
+
+                      RIFT_INSTALL="/usr/rift"
+                      echo "Running RIFT.ware specific user-data script"
+
+                      echo "Setting RIFT_EXTERNAL_ADDRESS to $floatingIP"
+                      mkdir -p $RIFT_INSTALL/var/rift/env.d
+                      echo "$floatingIP" > $RIFT_INSTALL/var/rift/env.d/RIFT_EXTERNAL_ADDRESS
+
+                      echo "Restart RIFT.ware launchpad.service to effect the changes"
+                      systemctl restart launchpad.service
+                      echo "RIFT.ware launchpad.service restarted"
+                    path: /tmp/rift-setup
+                    permissions: '0700'
+                runcmd:
+                  - /tmp/rift-setup
+              params:
+                $floatingIP: { get_attr: [floating_ips, floating_ip_address] }
+outputs:
+  name:
+    description: Name of the tiny instance.
+    value: { get_attr: [tiny_instance, name] }
+  ip:
+    description: The IP address of the tiny instance.
+    value: { get_attr: [tiny_instance, first_address] }
+  port:
+    description: The network port of the Launchpad instance.
+    value: { get_resource: port }
+  floating_ip:
+    description: Floating IP of new instance.
+    value: { get_attr: [ floating_ips, floating_ip_address ] }
